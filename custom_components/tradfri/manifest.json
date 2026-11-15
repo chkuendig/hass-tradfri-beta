@@ -13,6 +13,9 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/chkuendig/hass-tradfri-beta/issues",
   "loggers": ["pytradfri"],
-  "requirements": ["pytradfri[async]==15.0.0"],
+  "requirements": [
+    "git+https://github.com/chkuendig/aiocoap@0.4.17+chkuendig.1#aiocoap==0.4.17+chkuendig.1",
+    "pytradfri[async]==15.0.0"
+  ],
   "version": "1.0.0"
 }
