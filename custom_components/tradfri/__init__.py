@@ -11,12 +11,13 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import config_validation as cv, device_registry as dr
 from homeassistant.helpers.dispatcher import (
     async_dispatcher_connect,
     async_dispatcher_send,
 )
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.typing import ConfigType
 
 from .const import CONF_GATEWAY_ID, CONF_IDENTITY, CONF_KEY, DOMAIN, LOGGER
 from .coordinator import (
@@ -24,6 +25,9 @@ from .coordinator import (
     TradfriData,
     TradfriDeviceDataUpdateCoordinator,
 )
+from .services import async_setup_services, async_unload_management
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 PLATFORMS = [
     Platform.COVER,
@@ -34,6 +38,12 @@ PLATFORMS = [
 ]
 SIGNAL_GW = "tradfri.gw_status"
 TIMEOUT_API = 30
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Register the gateway management actions."""
+    async_setup_services(hass)
+    return True
 
 
 async def async_setup_entry(
@@ -122,6 +132,7 @@ async def async_setup_entry(
 
 async def async_unload_entry(hass: HomeAssistant, entry: TradfriConfigEntry) -> None:
     """Unload a config entry."""
+    await async_unload_management(hass, entry)
     await hass.config_entries.async_unload_platforms_or_raise(entry, PLATFORMS)
     await entry.runtime_data.factory.shutdown()
 

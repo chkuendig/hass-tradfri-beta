@@ -1,0 +1,100 @@
+pair_devices:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: tradfri
+    seconds:
+      default: 120
+      selector:
+        number:
+          min: 30
+          max: 600
+          unit_of_measurement: s
+list_groups:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: tradfri
+rename_device:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: tradfri
+    name:
+      required: true
+      selector:
+        text:
+rename_group:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: tradfri
+    group:
+      required: true
+      selector:
+        text:
+    name:
+      required: true
+      selector:
+        text:
+create_group:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: tradfri
+    name:
+      required: true
+      selector:
+        text:
+    device_ids:
+      selector:
+        device:
+          integration: tradfri
+          multiple: true
+delete_group:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: tradfri
+    group:
+      required: true
+      selector:
+        text:
+add_to_group:
+  fields:
+    group:
+      required: true
+      selector:
+        text:
+    device_ids:
+      required: true
+      selector:
+        device:
+          integration: tradfri
+          multiple: true
+remove_from_group:
+  fields:
+    group:
+      required: true
+      selector:
+        text:
+    device_ids:
+      required: true
+      selector:
+        device:
+          integration: tradfri
+          multiple: true
+remove_device:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: tradfri
