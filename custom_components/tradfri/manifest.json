@@ -13,6 +13,6 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/chkuendig/hass-tradfri-beta/issues",
   "loggers": ["pytradfri"],
-  "requirements": ["pytradfri[async]==14.0.0"],
+  "requirements": ["pytradfri[async]==15.0.0"],
   "version": "1.0.0"
 }

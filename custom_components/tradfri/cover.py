@@ -4,7 +4,11 @@ from typing import TYPE_CHECKING, Any, override
 
 from pytradfri.api.aiocoap_api import APIRequestProtocol
 
-from homeassistant.components.cover import ATTR_POSITION, CoverEntity
+from homeassistant.components.cover import (
+    ATTR_POSITION,
+    CoverEntity,
+    CoverEntityFeature,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
@@ -37,6 +41,12 @@ class TradfriCover(TradfriBaseEntity, CoverEntity):
     """The platform class required by Home Assistant."""
 
     _attr_name = None
+    _attr_supported_features = (
+        CoverEntityFeature.OPEN
+        | CoverEntityFeature.CLOSE
+        | CoverEntityFeature.STOP
+        | CoverEntityFeature.SET_POSITION
+    )
 
     def __init__(
         self,
@@ -76,7 +86,9 @@ class TradfriCover(TradfriBaseEntity, CoverEntity):
         """
         if not self._device_data:
             return None
-        return 100 - self._device_data.current_cover_position
+        if (position := self._device_data.current_cover_position) is None:
+            return None
+        return 100 - position
 
     @override
     async def async_set_cover_position(self, **kwargs: Any) -> None:
@@ -108,6 +120,8 @@ class TradfriCover(TradfriBaseEntity, CoverEntity):
 
     @property
     @override
-    def is_closed(self) -> bool:
+    def is_closed(self) -> bool | None:
         """Return if the cover is closed or not."""
-        return self.current_cover_position == 0
+        if (position := self.current_cover_position) is None:
+            return None
+        return position == 0

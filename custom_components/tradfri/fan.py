@@ -90,7 +90,7 @@ class TradfriAirPurifierFan(TradfriBaseEntity, FanEntity):
 
     @property
     @override
-    def is_on(self) -> bool:
+    def is_on(self) -> bool | None:
         """Return true if switch is on."""
         if not self._device_data:
             return False

@@ -71,18 +71,7 @@ class TradfriLight(TradfriBaseEntity, LightEntity):
         # Legacy format, kept as migrating existing unique IDs is not worth the risk
         self._attr_unique_id = f"light-{gateway_id}-{self._device_id}"  # pylint: disable=home-assistant-entity-unique-id-redundant-platform
         self._hs_color = None
-
-        # Calculate supported color modes
-        modes: set[ColorMode] = {ColorMode.ONOFF}
-        if self._supports_hs_color:
-            modes.add(ColorMode.HS)
-        if self._device_data.supports_color_temp:
-            modes.add(ColorMode.COLOR_TEMP)
-        if self._device_data.supports_dimmer:
-            modes.add(ColorMode.BRIGHTNESS)
-        self._attr_supported_color_modes = filter_supported_color_modes(modes)
-        if len(self._attr_supported_color_modes) == 1:
-            self._fixed_color_mode = next(iter(self._attr_supported_color_modes))
+        self._set_color_modes()
 
         self._attr_max_color_temp_kelvin = color_util.color_temperature_mired_to_kelvin(
             self._device_control.min_mireds
@@ -97,14 +86,35 @@ class TradfriLight(TradfriBaseEntity, LightEntity):
         # supports_hsb_xy_color is False for color bulbs that also report mireds
         return self._device_data.raw.color_hue is not None
 
+    def _set_color_modes(self) -> None:
+        """Derive the supported color modes from the values the light reports.
+
+        A light that reported no values (e.g. unreachable at setup) only
+        shows its capabilities on a later refresh.
+        """
+        modes: set[ColorMode] = {ColorMode.ONOFF}
+        if self._supports_hs_color:
+            modes.add(ColorMode.HS)
+        if self._device_data.supports_color_temp:
+            modes.add(ColorMode.COLOR_TEMP)
+        if self._device_data.supports_dimmer:
+            modes.add(ColorMode.BRIGHTNESS)
+        self._attr_supported_color_modes = filter_supported_color_modes(modes)
+        self._fixed_color_mode = (
+            next(iter(self._attr_supported_color_modes))
+            if len(self._attr_supported_color_modes) == 1
+            else None
+        )
+
     @override
     def _refresh(self) -> None:
         """Refresh the device."""
         self._device_data = self._device_control.lights[0]
+        self._set_color_modes()
 
     @property
     @override
-    def is_on(self) -> bool:
+    def is_on(self) -> bool | None:
         """Return true if light is on."""
         if not self._device_data:
             return False

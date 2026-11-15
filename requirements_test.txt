@@ -1,2 +1,2 @@
 pytest-homeassistant==2026.11.1
-pytradfri[async]==14.0.0
+pytradfri[async]==15.0.0
