@@ -13,7 +13,13 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.const import Platform, UnitOfDensity, UnitOfRatio, UnitOfTime
+from homeassistant.const import (
+    EntityCategory,
+    Platform,
+    UnitOfDensity,
+    UnitOfRatio,
+    UnitOfTime,
+)
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -79,6 +85,15 @@ SENSOR_DESCRIPTIONS_FAN: tuple[TradfriSensorEntityDescription, ...] = (
 )
 
 
+SENSOR_DESCRIPTION_LAST_SEEN = TradfriSensorEntityDescription(
+    key="last_seen",
+    translation_key="last_seen",
+    device_class=SensorDeviceClass.TIMESTAMP,
+    entity_category=EntityCategory.DIAGNOSTIC,
+    value=lambda device: device.last_seen,
+)
+
+
 @callback
 def _migrate_old_unique_ids(hass: HomeAssistant, old_unique_id: str, key: str) -> None:
     """Migrate unique IDs to the new format."""
@@ -120,6 +135,15 @@ async def async_setup_entry(
 
     entities: list[TradfriSensor] = []
 
+    # Diagnostic for every device; stays available while the device is
+    # unreachable, which is when it matters.
+    last_seen: list[TradfriSensor] = [
+        TradfriLastSeenSensor(
+            coordinator, api, gateway_id, description=SENSOR_DESCRIPTION_LAST_SEEN
+        )
+        for coordinator in tradfri_data.coordinator_list
+    ]
+
     for device_coordinator in tradfri_data.coordinator_list:
         if (
             not device_coordinator.device.has_light_control
@@ -150,7 +174,7 @@ async def async_setup_entry(
                 )
             )
 
-    async_add_entities(entities)
+    async_add_entities(entities + last_seen)
 
 
 class TradfriSensor(TradfriBaseEntity, SensorEntity):
@@ -182,3 +206,13 @@ class TradfriSensor(TradfriBaseEntity, SensorEntity):
     def _refresh(self) -> None:
         """Refresh the device."""
         self._attr_native_value = self.entity_description.value(self.coordinator.data)
+
+
+class TradfriLastSeenSensor(TradfriSensor):
+    """Last time the gateway heard from the device."""
+
+    @property
+    @override
+    def available(self) -> bool:
+        """Available whenever the gateway is, even if the device is unreachable."""
+        return self.coordinator.last_update_success
