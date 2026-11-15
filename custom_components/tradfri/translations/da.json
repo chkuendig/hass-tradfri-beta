@@ -1,0 +1,36 @@
+{
+    "config": {
+        "abort": {
+            "already_configured": "Enheden er allerede konfigureret"
+        },
+        "error": {
+            "cannot_authenticate": "Kan ikke godkende - er din gateway parret med en anden server som f.eks. HomeKit?",
+            "cannot_connect": "Forbindelse mislykkedes",
+            "invalid_security_code": "Kunne ikke registrere med den angivne kode. Hvis dette forts\u00e6tter, kan du pr\u00f8ve at genstarte gatewayen.",
+            "timeout": "Timeout ved validering af kode"
+        },
+        "step": {
+            "auth": {
+                "data": {
+                    "host": "V\u00e6rt",
+                    "security_code": "Sikkerhedskode"
+                },
+                "data_description": {
+                    "host": "V\u00e6rtsnavn eller IP-adresse p\u00e5 din Tr\u00e5dfri-gateway."
+                },
+                "description": "Du kan finde sikkerhedskoden p\u00e5 bagsiden af din gateway.",
+                "title": "Indtast sikkerhedskode"
+            }
+        }
+    },
+    "entity": {
+        "sensor": {
+            "aqi": {
+                "name": "Luftkvalitet"
+            },
+            "filter_life_remaining": {
+                "name": "Filtertid tilbage"
+            }
+        }
+    }
+}

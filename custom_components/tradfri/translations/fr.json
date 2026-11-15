@@ -1,0 +1,36 @@
+{
+    "config": {
+        "abort": {
+            "already_configured": "L'appareil est d\u00e9j\u00e0 configur\u00e9"
+        },
+        "error": {
+            "cannot_authenticate": "Impossible de s'authentifier, votre passerelle est-elle associ\u00e9e \u00e0 un autre serveur comme par exemple HomeKit\u00a0?",
+            "cannot_connect": "\u00c9chec de la connexion",
+            "invalid_security_code": "\u00c9chec de l'enregistrement avec le code fourni. Si le probl\u00e8me persiste, essayez de red\u00e9marrer la passerelle.",
+            "timeout": "D\u00e9lai d'attente de la validation du code expir\u00e9."
+        },
+        "step": {
+            "auth": {
+                "data": {
+                    "host": "H\u00f4te",
+                    "security_code": "Code de s\u00e9curit\u00e9"
+                },
+                "data_description": {
+                    "host": "Nom d'h\u00f4te ou adresse IP de votre passerelle Tr\u00e5dfri."
+                },
+                "description": "Vous pouvez trouver le code de s\u00e9curit\u00e9 au dos de votre passerelle.",
+                "title": "Entrer le code de s\u00e9curit\u00e9"
+            }
+        }
+    },
+    "entity": {
+        "sensor": {
+            "aqi": {
+                "name": "Qualit\u00e9 de l'air"
+            },
+            "filter_life_remaining": {
+                "name": "Temps restant du filtre"
+            }
+        }
+    }
+}

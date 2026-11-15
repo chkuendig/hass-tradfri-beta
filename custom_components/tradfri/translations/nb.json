@@ -1,0 +1,23 @@
+{
+    "config": {
+        "abort": {
+            "already_configured": "Enhet er allerede konfigurert"
+        },
+        "error": {
+            "cannot_connect": "Tilkobling mislyktes",
+            "timeout": "Tidsavbrudd ved validering av kode."
+        },
+        "step": {
+            "auth": {
+                "data": {
+                    "host": "Vert"
+                },
+                "data_description": {
+                    "host": "Vertsnavn eller IP-adresse til din Tr\u00e5dfri-gateway."
+                },
+                "description": "Du finner sikkerhetskoden p\u00e5 baksiden av gatewayen din",
+                "title": "Angi sikkerhetskode"
+            }
+        }
+    }
+}

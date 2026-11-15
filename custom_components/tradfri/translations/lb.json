@@ -1,0 +1,20 @@
+{
+    "config": {
+        "abort": {
+            "already_configured": "Apparat ass schon konfigur\u00e9iert"
+        },
+        "error": {
+            "cannot_connect": "Feeler beim verbannen",
+            "timeout": "Z\u00e4it Iwwerschreidung\u00a0beim valid\u00e9ieren vum Code"
+        },
+        "step": {
+            "auth": {
+                "data": {
+                    "host": "Apparat"
+                },
+                "description": "Dir fannt de S\u00e9cherheets Code op der R\u00e9cks\u00e4it vun \u00e4rem Gateway.",
+                "title": "Gitt de S\u00e9cherheets Code an"
+            }
+        }
+    }
+}

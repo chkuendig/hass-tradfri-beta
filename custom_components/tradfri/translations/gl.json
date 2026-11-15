@@ -1,0 +1,36 @@
+{
+    "config": {
+        "abort": {
+            "already_configured": "O dispositivo xa est\u00e1 configurado"
+        },
+        "error": {
+            "cannot_authenticate": "Non se pode autenticar. Est\u00e1 a t\u00faa pasarela emparellada con outro servidor, como por exemplo HomeKit?",
+            "cannot_connect": "Non se puido conectar",
+            "invalid_security_code": "Non se puido rexistrar co c\u00f3digo indicado. Se segue pasando, tenta reiniciar a pasarela.",
+            "timeout": "Esgotouse o tempo ao validar o c\u00f3digo."
+        },
+        "step": {
+            "auth": {
+                "data": {
+                    "host": "Host",
+                    "security_code": "C\u00f3digo de seguridade"
+                },
+                "data_description": {
+                    "host": "Nome do host ou enderezo IP da t\u00faa pasarela Tr\u00e5dfri."
+                },
+                "description": "Podes atopar o c\u00f3digo de seguridade na parte traseira da t\u00faa pasarela.",
+                "title": "Introduce o c\u00f3digo de seguridade"
+            }
+        }
+    },
+    "entity": {
+        "sensor": {
+            "aqi": {
+                "name": "Calidade do aire"
+            },
+            "filter_life_remaining": {
+                "name": "Tempo restante do filtro"
+            }
+        }
+    }
+}

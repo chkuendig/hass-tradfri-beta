@@ -1,0 +1,29 @@
+{
+    "config": {
+        "abort": {
+            "already_configured": "Gailua dagoeneko konfiguratuta dago"
+        },
+        "error": {
+            "cannot_connect": "Konexioak huts egin du"
+        },
+        "step": {
+            "auth": {
+                "data": {
+                    "host": "Ostalari",
+                    "security_code": "Segurtasun kodea"
+                },
+                "data_description": {
+                    "host": "Zure Tr\u00e5dfri gateway-aren ostalari-izena edo IP helbidea."
+                },
+                "title": "Segurtasun kodea sartu"
+            }
+        }
+    },
+    "entity": {
+        "sensor": {
+            "aqi": {
+                "name": "Airearen kalitatea"
+            }
+        }
+    }
+}
