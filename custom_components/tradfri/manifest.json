@@ -15,7 +15,8 @@
   "loggers": ["pytradfri"],
   "requirements": [
     "git+https://github.com/chkuendig/aiocoap@0.4.17+chkuendig.1#aiocoap==0.4.17+chkuendig.1",
-    "pytradfri[async]==15.0.0"
+    "DTLSSocket==0.1.19",
+    "git+https://github.com/chkuendig/pytradfri@15.0.0+chkuendig.1#pytradfri==15.0.0+chkuendig.1"
   ],
   "version": "1.0.0"
 }

@@ -1,3 +1,4 @@
 pytest-homeassistant==2026.11.1
 aiocoap @ git+https://github.com/chkuendig/aiocoap@0.4.17+chkuendig.1
-pytradfri[async]==15.0.0
+DTLSSocket==0.1.19
+pytradfri @ git+https://github.com/chkuendig/pytradfri@15.0.0+chkuendig.1
