@@ -10,7 +10,7 @@ from pytradfri.device import Device
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import Event, HomeAssistant, callback
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers import config_validation as cv, device_registry as dr
 from homeassistant.helpers.dispatcher import (
     async_dispatcher_connect,
@@ -25,7 +25,7 @@ from .coordinator import (
     TradfriData,
     TradfriDeviceDataUpdateCoordinator,
 )
-from .services import async_setup_services, async_unload_management
+from .services import async_setup_services, async_unload_management, gateway_operation
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
@@ -128,6 +128,42 @@ async def async_setup_entry(
     )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, entry: TradfriConfigEntry, device_entry: dr.DeviceEntry
+) -> bool:
+    """Allow deleting a device in the UI; it is also unpaired on the gateway.
+
+    Only devices the gateway no longer lists or cannot reach may be deleted
+    this way. Reachable devices need the tradfri.remove_device action,
+    because an unpaired device must be reset before it can be paired again.
+    """
+    prefix = f"{entry.data[CONF_GATEWAY_ID]}-"
+    device_ids = [
+        int(identifier.removeprefix(prefix))
+        for domain, identifier in device_entry.identifiers
+        if domain == DOMAIN and identifier.startswith(prefix)
+    ]
+    if not device_ids:
+        return False  # The gateway itself.
+    try:
+        async with gateway_operation(hass, entry) as admin:
+            device = next(
+                (d for d in await admin.devices() if d.id == device_ids[0]), None
+            )
+            if device is None:
+                return True
+            if device.reachable:
+                raise HomeAssistantError(
+                    f"{device.name} is reachable; use the tradfri.remove_device "
+                    "action to unpair it"
+                )
+            await admin.remove_device(device.id)
+    except RequestError as err:
+        raise HomeAssistantError(f"The IKEA gateway refused: {err}") from err
+    hass.config_entries.async_schedule_reload(entry.entry_id)
+    return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: TradfriConfigEntry) -> None:
