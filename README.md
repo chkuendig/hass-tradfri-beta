@@ -54,9 +54,10 @@ restart. The entry and entities stay.
 
 On first start Home Assistant installs two forks from GitHub, so that start needs internet access:
 
-- [chkuendig/pytradfri](https://github.com/chkuendig/pytradfri) `15.0.0+chkuendig.1`: pytradfri 15.0.0 plus
-  commands to create and delete groups and to remove devices, and a fix that makes error replies without a payload
-  raise instead of passing as success.
+- [chkuendig/pytradfri](https://github.com/chkuendig/pytradfri) `15.0.0+chkuendig.2`: pytradfri 15.0.0 plus
+  commands to create and delete groups and to remove devices, a target group for the pairing window, the power-on
+  behavior of lights and outlets, and a fix that makes error replies without a payload raise instead of passing as
+  success.
 - [chkuendig/aiocoap](https://github.com/chkuendig/aiocoap) `0.4.17+chkuendig.1`: aiocoap 0.4.17 plus the fix for
   that crash.
 
