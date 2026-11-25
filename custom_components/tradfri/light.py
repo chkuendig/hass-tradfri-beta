@@ -16,6 +16,7 @@ from homeassistant.components.light import (
     filter_supported_color_modes,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -315,7 +316,11 @@ class TradfriGroupLight(
             manufacturer="IKEA of Sweden",
             model="TRADFRI group",
             name=group.name,
-            via_device=(DOMAIN, gateway_id),
+            via_device_id=dr.async_get_device_id_by_identifier(
+                group_coordinator.hass,
+                (DOMAIN, gateway_id),
+                config_entry_id=group_coordinator.config_entry.entry_id,
+            ),
         )
 
     @property

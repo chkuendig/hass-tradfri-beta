@@ -276,3 +276,17 @@ async def test_group_observe_failure_shuts_factory(
 
     assert entry.state is ConfigEntryState.SETUP_RETRY
     mock_api_factory.shutdown.assert_awaited()
+
+
+@pytest.mark.parametrize("device", ["bulb_w"], indirect=True)
+async def test_group_device_under_gateway(
+    hass: HomeAssistant, device_registry: dr.DeviceRegistry, device: Device
+) -> None:
+    """A group's device entry is linked to the gateway's."""
+    await setup_integration(hass)
+    (gateway,) = device_registry.async_get_devices(identifiers={(DOMAIN, GATEWAY_ID)})
+    (group_device,) = device_registry.async_get_devices(
+        identifiers={(DOMAIN, f"{GATEWAY_ID}-group-{LIVING_ID}")}
+    )
+
+    assert group_device.via_device_id == gateway.id
