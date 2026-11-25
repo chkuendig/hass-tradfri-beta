@@ -18,5 +18,5 @@
     "DTLSSocket==0.1.19",
     "git+https://github.com/chkuendig/pytradfri@15.0.0+chkuendig.2#pytradfri==15.0.0+chkuendig.2"
   ],
-  "version": "1.1.0"
+  "version": "1.1.1"
 }
