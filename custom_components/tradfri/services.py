@@ -56,6 +56,7 @@ SCHEMAS: dict[str, vol.Schema] = {
             vol.Optional(CONF_SECONDS, default=120): vol.All(
                 vol.Coerce(int), vol.Range(30, 600)
             ),
+            vol.Optional(CONF_GROUP): _NAME,
         }
     ),
     "list_groups": vol.Schema(_ENTRY),
@@ -151,6 +152,44 @@ async def async_unload_management(
         hass.data[DATA_STATE].pop(entry.entry_id, None)
 
 
+async def _reload(hass: HomeAssistant, entry: TradfriConfigEntry) -> None:
+    """Reload the entry so entities follow the change, and wait for it.
+
+    Waiting means the action returns with the gateway loaded again, so a
+    script can run the next action straight away. Only call it after leaving
+    gateway_operation, as unloading waits for that.
+
+    The reload runs in its own task: a stopped script cancels the action, and
+    that must not cancel the unload halfway, which would leave the entry
+    stuck unloading.
+    """
+    reload = hass.async_create_task(
+        hass.config_entries.async_reload(entry.entry_id),
+        f"tradfri reload {entry.title}",
+    )
+    try:
+        loaded = await asyncio.shield(reload)
+    except asyncio.CancelledError:
+        # Nobody awaits the reload any more; report how it ends.
+        reload.add_done_callback(functools.partial(_log_reload_result, entry))
+        raise
+    if not loaded or entry.state is not ConfigEntryState.LOADED:
+        raise HomeAssistantError(
+            "The gateway change was made, but the integration could not"
+            " reconnect to the IKEA gateway afterwards"
+        )
+
+
+def _log_reload_result(entry: TradfriConfigEntry, reload: asyncio.Task[bool]) -> None:
+    """Log a reload that failed after the action waiting for it was cancelled."""
+    if reload.cancelled():
+        return
+    if (err := reload.exception()) is not None:
+        LOGGER.error("Reloading %s failed", entry.title, exc_info=err)
+    elif not reload.result():
+        LOGGER.warning("Reloading %s failed; the gateway is not loaded", entry.title)
+
+
 def _loaded_entries(hass: HomeAssistant) -> list[TradfriConfigEntry]:
     return [
         e
@@ -184,6 +223,10 @@ def _gateway_device(
         prefix = f"{entry.data[CONF_GATEWAY_ID]}-"
         for domain, identifier in device.identifiers:
             if domain == DOMAIN and identifier.startswith(prefix):
+                if identifier.removeprefix(prefix).startswith("group-"):
+                    raise ServiceValidationError(
+                        f"{device.name} is a group, not a device"
+                    )
                 return entry, int(identifier.removeprefix(prefix))
     raise ServiceValidationError(
         f"{device.name} is not a device of a loaded IKEA gateway"
@@ -239,14 +282,20 @@ def _translate_errors[**P, R](
     return wrapper
 
 
-async def _pair(admin: TradfriAdmin, seconds: int) -> list[Device]:
-    """Keep the pairing window open for this long; return the devices that joined."""
+async def _pair(
+    admin: TradfriAdmin, seconds: int, group_id: int | None = None
+) -> list[Device]:
+    """Keep the pairing window open for this long; return the devices that joined.
+
+    With group_id, a joining controller is placed in that group, like the
+    IKEA app's add-accessory flow.
+    """
     before = {d.id for d in await admin.devices()}
     end = time.monotonic() + seconds
     LOGGER.info("Pairing window open for %s s", seconds)
     try:
         while (left := end - time.monotonic()) > 0:
-            await admin.open_pairing()
+            await admin.open_pairing(group_id=group_id)
             await asyncio.sleep(min(PAIRING_RENEW_SECONDS, left))
     finally:
         try:
@@ -262,11 +311,22 @@ def async_setup_services(hass: HomeAssistant) -> None:
     @_translate_errors
     async def pair_devices(call: ServiceCall) -> ServiceResponse:
         entry = _entry(hass, call.data.get(CONF_CONFIG_ENTRY_ID))
+        group_id: int | None = None
+        if (group_name := call.data.get(CONF_GROUP)) is not None:
+            async with gateway_operation(hass, entry) as admin:
+                group = await admin.get_group(group_name)
+                _not_supergroup(group, "used as a pairing target")
+                group_id = group.id
+        # Re-read the state after the (awaited) lookup: the entry may have
+        # been unloaded, or another session started meanwhile. Nothing awaits
+        # between the check and the task registration, so it holds.
         state = _state(hass, entry)
         if state.pairing and not state.pairing.done():
             raise ServiceValidationError("Pairing is already open on this gateway")
         state.pairing = entry.async_create_background_task(
-            hass, _pair(_admin(entry), call.data[CONF_SECONDS]), "tradfri pairing"
+            hass,
+            _pair(_admin(entry), call.data[CONF_SECONDS], group_id=group_id),
+            "tradfri pairing",
         )
         try:
             new = await state.pairing
@@ -277,7 +337,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
                 "Pairing stopped because the IKEA gateway integration was unloaded"
             ) from None
         if new:
-            hass.config_entries.async_schedule_reload(entry.entry_id)
+            await _reload(hass, entry)
         return {
             "new_devices": [
                 {"id": d.id, "name": d.name, "model": d.device_info.model_number}
@@ -324,6 +384,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
                     f"A group named {call.data[CONF_NAME]} already exists"
                 )
             await admin.rename_group(group, call.data[CONF_NAME])
+        await _reload(hass, entry)
 
     @_translate_errors
     async def create_group(call: ServiceCall) -> ServiceResponse:
@@ -339,7 +400,9 @@ def async_setup_services(hass: HomeAssistant) -> None:
                 raise ServiceValidationError(
                     f"A group named {call.data[CONF_NAME]} already exists"
                 )
-            return {"group_id": await admin.create_group(call.data[CONF_NAME], members)}
+            group_id = await admin.create_group(call.data[CONF_NAME], members)
+        await _reload(hass, entry)
+        return {"group_id": group_id}
 
     @_translate_errors
     async def delete_group(call: ServiceCall) -> None:
@@ -348,6 +411,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
             group = await admin.get_group(call.data[CONF_GROUP])
             _not_supergroup(group, "deleted")
             await admin.delete_group(group)
+        await _reload(hass, entry)
 
     @_translate_errors
     async def add_to_group(call: ServiceCall) -> None:
@@ -356,6 +420,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
             group = await admin.get_group(call.data[CONF_GROUP])
             _not_supergroup(group, "changed")
             await admin.add_members(group.id, members)
+        await _reload(hass, entry)
 
     @_translate_errors
     async def remove_from_group(call: ServiceCall) -> None:
@@ -364,13 +429,14 @@ def async_setup_services(hass: HomeAssistant) -> None:
             group = await admin.get_group(call.data[CONF_GROUP])
             _not_supergroup(group, "changed")
             await admin.remove_members(group.id, members)
+        await _reload(hass, entry)
 
     @_translate_errors
     async def remove_device(call: ServiceCall) -> None:
         entry, gateway_id = _gateway_device(hass, call.data[CONF_DEVICE_ID])
         async with gateway_operation(hass, entry) as admin:
             await admin.remove_device(gateway_id)
-        hass.config_entries.async_schedule_reload(entry.entry_id)
+        await _reload(hass, entry)
 
     handlers: dict[
         str, tuple[Callable[[ServiceCall], Awaitable[Any]], SupportsResponse]

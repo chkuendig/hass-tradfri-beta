@@ -6,7 +6,10 @@ cannot be deleted (4.00), and a deleted group stays listed once but answers
 4.04. Everything else is answered by the CommandStore.
 
 Tests can make a new group show up only after some listings, or never, and
-can hold every change until they release it.
+can hold every change until they release it. Adds of devices in `offline`
+are accepted but never commit, as when a device is powered off; with
+`commit_after_reads`, an add lands only after that many reads of the group,
+as the real commit waits for the device's answer.
 """
 
 import asyncio
@@ -56,6 +59,10 @@ class FakeGateway:
     stale: set[int] = field(default_factory=set)
     removed_devices: list[int] = field(default_factory=list)
     commissioning: list[int] = field(default_factory=list)
+    commissioning_data: list[dict[str, Any]] = field(default_factory=list)
+    offline: set[int] = field(default_factory=set)
+    commit_after_reads: int = 0
+    _pending: list[list[int]] = field(default_factory=list)  # [group, member, reads]
     reboots: int = 0
     next_id: int = 131100
     reboot_error: Exception | None = None
@@ -101,6 +108,7 @@ class FakeGateway:
             and ATTR_COMMISSIONING_MODE in data
         ):
             self.commissioning.append(data[ATTR_COMMISSIONING_MODE])
+            self.commissioning_data.append(dict(data))
             if self.on_commissioning:
                 self.on_commissioning(data[ATTR_COMMISSIONING_MODE])
             return None
@@ -124,6 +132,11 @@ class FakeGateway:
             return command.process_result([*listed, *self.stale])
         if command.method == "get":
             group_id = int(path[0])
+            for pending in [p for p in self._pending if p[0] == group_id]:
+                pending[2] -= 1
+                if pending[2] <= 0:
+                    self._pending.remove(pending)
+                    self.members(group_id).append(pending[1])
             if group_id in self.stale:
                 self.stale.discard(group_id)
                 raise ClientError("Gateway payload: . Error code: 4.04 Not Found.")
@@ -139,13 +152,21 @@ class FakeGateway:
         if command.method == "put" and path in (["add"], ["remove"]):
             members = self.members(data[ATTR_GROUP_ID])
             for member in data[ATTR_ID]:
+                if path == ["add"] and member in self.offline:
+                    continue  # Queued (2.04), but the device never confirms.
+                if path == ["add"] and self.commit_after_reads:
+                    self._pending.append(
+                        [data[ATTR_GROUP_ID], member, self.commit_after_reads]
+                    )
+                    continue
                 if path == ["add"] and member not in members:
                     members.append(member)
                 if path == ["remove"] and member in members:
                     members.remove(member)
             return None
         if command.method == "put":
-            self.groups[int(path[0])]["9001"] = data[ATTR_NAME]
+            # A rename, or light state (on/off, brightness) for the whole group.
+            self.groups[int(path[0])].update(data)
             return None
         if command.method == "delete":
             group_id = int(path[0])

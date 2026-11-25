@@ -37,6 +37,10 @@ def mock_gateway_fixture(command_store: CommandStore, gateway_response: str) -> 
         gateway.get_devices(),
         [],
     )
+    command_store.register_response(
+        gateway.get_groups(),
+        [],
+    )
     return gateway
 
 

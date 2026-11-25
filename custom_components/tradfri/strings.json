@@ -39,7 +39,7 @@
   "services": {
     "pair_devices": {
       "name": "Pair devices",
-      "description": "Open the gateway's pairing window (renewed every 30 s) so reset devices can join. One session per gateway. Returns the new devices and reloads the integration so they appear.",
+      "description": "Open the gateway's pairing window (renewed every 30 s) so reset devices can join. With a group, a joining controller is placed in it, like the IKEA app's add-accessory step. One session per gateway. Returns the new devices and reloads the integration so they appear.",
       "fields": {
         "config_entry_id": {
           "name": "Gateway",
@@ -48,6 +48,10 @@
         "seconds": {
           "name": "Duration",
           "description": "How long to keep pairing open."
+        },
+        "group": {
+          "name": "Group",
+          "description": "Pair a controller into this gateway group (its name)."
         }
       }
     },

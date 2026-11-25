@@ -13,8 +13,10 @@ from pytradfri.device import Device
 from pytradfri.gateway import Gateway
 import voluptuous as vol
 
+from custom_components import tradfri as tradfri_init
 from custom_components.tradfri.const import DOMAIN
 from homeassistant.auth.models import User
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.exceptions import (
     HomeAssistantError,
@@ -245,10 +247,13 @@ async def test_group_actions_right_after_delete(
     hass: HomeAssistant, fake_gateway: FakeGateway, device: Device
 ) -> None:
     """The gateway still lists a deleted group once; listings skip it."""
-    await setup_integration(hass)
+    entry = await setup_integration(hass)
     await _call(hass, "delete_group", {"group": "Living"})
-    assert fake_gateway.stale == {LIVING_ID}
+    # The action waits for the reload, whose setup already met the stale id.
+    assert not fake_gateway.stale
+    assert entry.state is ConfigEntryState.LOADED
 
+    fake_gateway.stale.add(LIVING_ID)
     result = await _call(hass, "list_groups", {}, response=True)
 
     assert [group["name"] for group in result["groups"]] == ["SuperGroup"]
@@ -343,12 +348,19 @@ async def test_remove_device(
 ) -> None:
     """A device is unpaired and the entry reloaded."""
     entry = await setup_integration(hass)
+    setups = []
+    original = hass.config_entries.async_reload
 
-    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+    async def reload(entry_id: str) -> bool:
+        setups.append(entry_id)
+        return await original(entry_id)
+
+    with patch.object(hass.config_entries, "async_reload", reload):
         await _call(hass, "remove_device", {"device_id": _device_id(hass)})
 
     assert fake_gateway.removed_devices == [OUTLET_ID]
-    reload.assert_called_once_with(entry.entry_id)
+    assert setups == [entry.entry_id]
+    assert entry.state is ConfigEntryState.LOADED
 
 
 @pytest.mark.parametrize("device", ["outlet"], indirect=True)
@@ -377,7 +389,6 @@ async def test_pair_devices(
     with (
         patch("custom_components.tradfri.services.PAIRING_RENEW_SECONDS", 0),
         patch("custom_components.tradfri.services.time", clock),
-        patch.object(hass.config_entries, "async_schedule_reload") as reload,
     ):
         result = await _call(hass, "pair_devices", {"seconds": 30}, response=True)
 
@@ -387,7 +398,9 @@ async def test_pair_devices(
         ]
     }
     assert fake_gateway.commissioning == [60, 60, 0]
-    reload.assert_called_once_with(entry.entry_id)
+    # The action returns after the real reload, with the new bulb in place.
+    assert entry.state is ConfigEntryState.LOADED
+    assert hass.states.get("light.test_w")
 
 
 @pytest.mark.parametrize("device", ["outlet"], indirect=True)
@@ -481,3 +494,186 @@ async def test_no_gateway_loaded(hass: HomeAssistant, device: Device) -> None:
 
     with pytest.raises(ServiceValidationError, match="No IKEA gateway is loaded"):
         await _call(hass, "list_groups", {}, response=True)
+
+
+@pytest.mark.parametrize("device", ["outlet"], indirect=True)
+async def test_add_to_group_unconfirmed(
+    hass: HomeAssistant, fake_gateway: FakeGateway, device: Device
+) -> None:
+    """An add the device never confirms (powered off) is reported, not assumed."""
+    await setup_integration(hass)
+    fake_gateway.offline.add(OUTLET_ID)
+
+    with (
+        patch("custom_components.tradfri.admin.MEMBER_TIMEOUT_SECONDS", 0.05),
+        patch("custom_components.tradfri.admin._POLL_INTERVAL", 0.01),
+        pytest.raises(HomeAssistantError, match="may be unreachable"),
+    ):
+        await _call(
+            hass,
+            "add_to_group",
+            {"group": "Living", "device_ids": [_device_id(hass)]},
+        )
+
+    assert fake_gateway.members(LIVING_ID) == []
+
+
+@pytest.mark.parametrize("device", ["outlet"], indirect=True)
+async def test_add_to_group_already_member(
+    hass: HomeAssistant,
+    command_store: CommandStore,
+    fake_gateway: FakeGateway,
+    device: Device,
+) -> None:
+    """A device already in the group is not sent again."""
+    fake_gateway.add_group(LIVING_ID, "Living", [OUTLET_ID])
+    await setup_integration(hass)
+    command_store.sent_commands.clear()
+
+    await _call(
+        hass, "add_to_group", {"group": "Living", "device_ids": [_device_id(hass)]}
+    )
+
+    assert not [c for c in command_store.sent_commands if c.path[-1] == "add"]
+    assert fake_gateway.members(LIVING_ID) == [OUTLET_ID]
+
+
+@pytest.mark.parametrize("device", ["outlet"], indirect=True)
+async def test_pair_devices_into_group(
+    hass: HomeAssistant, fake_gateway: FakeGateway, device: Device
+) -> None:
+    """With a group, every window renewal names it as the target (9064)."""
+    await setup_integration(hass)
+    clock = MagicMock()
+    clock.monotonic.side_effect = count(0, 10)
+
+    with (
+        patch("custom_components.tradfri.services.PAIRING_RENEW_SECONDS", 0),
+        patch("custom_components.tradfri.services.time", clock),
+    ):
+        await _call(
+            hass, "pair_devices", {"seconds": 30, "group": "Living"}, response=True
+        )
+
+    assert fake_gateway.commissioning_data == [
+        {"9061": 60, "9064": LIVING_ID},
+        {"9061": 60, "9064": LIVING_ID},
+        {"9061": 0},
+    ]
+
+
+@pytest.mark.parametrize("device", ["outlet"], indirect=True)
+@pytest.mark.parametrize(
+    ("group", "error"),
+    [("SuperGroup", ServiceValidationError), ("Nowhere", ServiceValidationError)],
+)
+async def test_pair_devices_bad_group(
+    hass: HomeAssistant,
+    fake_gateway: FakeGateway,
+    device: Device,
+    group: str,
+    error: type[Exception],
+) -> None:
+    """The SuperGroup and unknown groups are refused before the window opens."""
+    await setup_integration(hass)
+
+    with pytest.raises(error):
+        await _call(hass, "pair_devices", {"seconds": 30, "group": group})
+
+    assert fake_gateway.commissioning == []
+
+
+@pytest.mark.parametrize("device", ["outlet"], indirect=True)
+async def test_add_to_group_delayed_commit(
+    hass: HomeAssistant, fake_gateway: FakeGateway, device: Device
+) -> None:
+    """An add that commits a few reads later is waited for, not reported failed."""
+    await setup_integration(hass)
+    fake_gateway.commit_after_reads = 3
+
+    with patch("custom_components.tradfri.admin._POLL_INTERVAL", 0.01):
+        await _call(
+            hass,
+            "add_to_group",
+            {"group": "Living", "device_ids": [_device_id(hass)]},
+        )
+
+    assert fake_gateway.members(LIVING_ID) == [OUTLET_ID]
+
+
+@pytest.mark.parametrize("device", ["outlet"], indirect=True)
+async def test_cancelled_action_does_not_strand_reload(
+    hass: HomeAssistant, fake_gateway: FakeGateway, device: Device
+) -> None:
+    """A script stopped during the reload must not leave the entry half unloaded."""
+    entry = await setup_integration(hass)
+    started, release = asyncio.Event(), asyncio.Event()
+    original = tradfri_init.async_unload_management
+
+    async def held_unload(hass: HomeAssistant, entry: Any) -> None:
+        started.set()
+        await release.wait()
+        await original(hass, entry)
+
+    with patch.object(tradfri_init, "async_unload_management", held_unload):
+        action = asyncio.ensure_future(
+            _call(hass, "rename_group", {"group": "Living", "name": "Lounge"})
+        )
+        await started.wait()
+        action.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await action
+        release.set()
+        await hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.LOADED
+    assert fake_gateway.name(LIVING_ID) == "Lounge"
+    result = await _call(hass, "list_groups", {}, response=True)
+    assert "Lounge" in [group["name"] for group in result["groups"]]
+
+
+@pytest.mark.parametrize("device", ["outlet"], indirect=True)
+async def test_failed_reload_is_reported(
+    hass: HomeAssistant, fake_gateway: FakeGateway, device: Device
+) -> None:
+    """If the gateway is gone after the change, the action says so."""
+    await setup_integration(hass)
+
+    with (
+        patch.object(hass.config_entries, "async_reload", return_value=False),
+        pytest.raises(HomeAssistantError, match="could not reconnect"),
+    ):
+        await _call(hass, "rename_group", {"group": "Living", "name": "Lounge"})
+
+    assert fake_gateway.name(LIVING_ID) == "Lounge"  # The change itself was made.
+
+
+@pytest.mark.parametrize("device", ["outlet"], indirect=True)
+async def test_late_reload_error_is_logged(
+    hass: HomeAssistant,
+    fake_gateway: FakeGateway,
+    device: Device,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A reload failing after its action was cancelled is logged, not lost."""
+    await setup_integration(hass)
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def failing_reload(entry_id: str) -> bool:
+        started.set()
+        await release.wait()
+        raise RuntimeError("setup broke")
+
+    with patch.object(hass.config_entries, "async_reload", failing_reload):
+        action = asyncio.ensure_future(
+            _call(hass, "rename_group", {"group": "Living", "name": "Lounge"})
+        )
+        await started.wait()
+        action.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await action
+        release.set()
+        await hass.async_block_till_done()
+
+    assert "Reloading Mock Title failed" in caplog.text
+    assert "setup broke" in caplog.text

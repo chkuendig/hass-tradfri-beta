@@ -1,11 +1,14 @@
 """Support for IKEA Tradfri."""
 
+import asyncio
 from datetime import datetime, timedelta
 
 from pytradfri import Gateway, RequestError
 from pytradfri.api.aiocoap_api import APIFactory, APIRequestProtocol
 from pytradfri.command import Command
 from pytradfri.device import Device
+from pytradfri.error import ClientError
+from pytradfri.group import Group
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, EVENT_HOMEASSISTANT_STOP, Platform
@@ -19,11 +22,13 @@ from homeassistant.helpers.dispatcher import (
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
 
+from .admin import SUPERGROUP_ID
 from .const import CONF_GATEWAY_ID, CONF_IDENTITY, CONF_KEY, DOMAIN, LOGGER
 from .coordinator import (
     TradfriConfigEntry,
     TradfriData,
     TradfriDeviceDataUpdateCoordinator,
+    TradfriGroupDataUpdateCoordinator,
 )
 from .services import async_setup_services, async_unload_management, gateway_operation
 
@@ -39,6 +44,22 @@ PLATFORMS = [
 ]
 SIGNAL_GW = "tradfri.gw_status"
 TIMEOUT_API = 30
+
+
+async def _fetch_each[T](api: APIRequestProtocol, commands: list[Command[T]]) -> list[T]:
+    """Fetch each item, skipping ones deleted on the gateway meanwhile."""
+    results = await asyncio.gather(
+        *(api(command, timeout=TIMEOUT_API) for command in commands),
+        return_exceptions=True,
+    )
+    items: list[T] = []
+    for result in results:
+        if isinstance(result, ClientError) and "4.04" in str(result):
+            continue
+        if isinstance(result, BaseException):
+            raise result
+        items.append(result)
+    return items
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -75,11 +96,25 @@ async def async_setup_entry(
         devices_commands: list[Command[Device]] = await api(
             gateway.get_devices(), timeout=TIMEOUT_API
         )
-        devices: list[Device] = await api(devices_commands, timeout=TIMEOUT_API)
+        devices: list[Device] = await _fetch_each(api, devices_commands)
+        group_commands: list[Command[Group]] = await api(
+            gateway.get_groups(), timeout=TIMEOUT_API
+        )
+        groups: list[Group] = await _fetch_each(api, group_commands)
 
     except RequestError as exc:
         await factory.shutdown()
         raise ConfigEntryNotReady from exc
+
+    # Only expose groups that actually contain a light; the gateway also keeps
+    # controller-only groups (one per paired remote) which have nothing to
+    # show, and the SuperGroup of all devices is not a room.
+    light_ids = {device.id for device in devices if device.has_light_control}
+    group_lights = [
+        group
+        for group in groups
+        if group.id != SUPERGROUP_ID and light_ids.intersection(group.member_ids)
+    ]
 
     dev_reg = dr.async_get(hass)
     dev_reg.async_get_or_create(
@@ -93,42 +128,63 @@ async def async_setup_entry(
         sw_version=gateway_info.firmware_version,
     )
 
-    remove_stale_devices(hass, entry, devices)
+    remove_stale_devices(hass, entry, devices, group_lights)
 
-    # Setup the device coordinators
-    tradfri_data = TradfriData(factory=factory, gateway=gateway, api=api)
+    # The factory holds the connection and every observation started below;
+    # if setup fails or is cancelled from here on, nothing else shuts it down.
+    try:
+        # Setup the device coordinators
+        tradfri_data = TradfriData(factory=factory, gateway=gateway, api=api)
 
-    for device in devices:
-        coordinator = TradfriDeviceDataUpdateCoordinator(
-            hass=hass, config_entry=entry, api=api, device=device
-        )
-        await coordinator.async_config_entry_first_refresh()
+        for device in devices:
+            coordinator = TradfriDeviceDataUpdateCoordinator(
+                hass=hass, config_entry=entry, api=api, device=device
+            )
+            await coordinator.async_config_entry_first_refresh()
+
+            entry.async_on_unload(
+                async_dispatcher_connect(
+                    hass, SIGNAL_GW, coordinator.set_hub_available
+                )
+            )
+            tradfri_data.coordinator_list.append(coordinator)
+
+        for group in group_lights:
+            group_coordinator = TradfriGroupDataUpdateCoordinator(
+                hass=hass, config_entry=entry, api=api, group=group
+            )
+            await group_coordinator.async_config_entry_first_refresh()
+
+            entry.async_on_unload(
+                async_dispatcher_connect(
+                    hass, SIGNAL_GW, group_coordinator.set_hub_available
+                )
+            )
+            tradfri_data.group_coordinator_list.append(group_coordinator)
+
+        entry.runtime_data = tradfri_data
+
+        async def async_keep_alive(now: datetime) -> None:
+            if hass.is_stopping:
+                return
+
+            gw_status = True
+            try:
+                await api(gateway.get_gateway_info())
+            except RequestError:
+                LOGGER.error("Keep-alive failed")
+                gw_status = False
+
+            async_dispatcher_send(hass, SIGNAL_GW, gw_status)
 
         entry.async_on_unload(
-            async_dispatcher_connect(hass, SIGNAL_GW, coordinator.set_hub_available)
+            async_track_time_interval(hass, async_keep_alive, timedelta(seconds=60))
         )
-        tradfri_data.coordinator_list.append(coordinator)
 
-    entry.runtime_data = tradfri_data
-
-    async def async_keep_alive(now: datetime) -> None:
-        if hass.is_stopping:
-            return
-
-        gw_status = True
-        try:
-            await api(gateway.get_gateway_info())
-        except RequestError:
-            LOGGER.error("Keep-alive failed")
-            gw_status = False
-
-        async_dispatcher_send(hass, SIGNAL_GW, gw_status)
-
-    entry.async_on_unload(
-        async_track_time_interval(hass, async_keep_alive, timedelta(seconds=60))
-    )
-
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    except BaseException:
+        await factory.shutdown()
+        raise
 
 
 async def async_remove_config_entry_device(
@@ -141,11 +197,16 @@ async def async_remove_config_entry_device(
     because an unpaired device must be reset before it can be paired again.
     """
     prefix = f"{entry.data[CONF_GATEWAY_ID]}-"
-    device_ids = [
-        int(identifier.removeprefix(prefix))
-        for domain, identifier in device_entry.identifiers
-        if domain == DOMAIN and identifier.startswith(prefix)
-    ]
+    device_ids = []
+    for domain, identifier in device_entry.identifiers:
+        if domain != DOMAIN or not identifier.startswith(prefix):
+            continue
+        if identifier.removeprefix(prefix).startswith("group-"):
+            raise HomeAssistantError(
+                f"{device_entry.name} is a group; delete it with the"
+                " tradfri.delete_group action"
+            )
+        device_ids.append(int(identifier.removeprefix(prefix)))
     if not device_ids:
         return False  # The gateway itself.
     try:
@@ -176,7 +237,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: TradfriConfigEntry) -> 
 
 @callback
 def remove_stale_devices(
-    hass: HomeAssistant, config_entry: ConfigEntry, devices: list[Device]
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    devices: list[Device],
+    groups: list[Group],
 ) -> None:
     """Remove stale devices from device registry."""
     device_registry = dr.async_get(hass)
@@ -184,6 +248,8 @@ def remove_stale_devices(
         device_registry, config_entry.entry_id
     )
     all_device_ids = {str(device.id) for device in devices}
+    # Group lights register their own device entry, keyed "group-<id>".
+    all_device_ids |= {f"group-{group.id}" for group in groups}
 
     for device_entry in device_entries:
         device_id: str | None = None

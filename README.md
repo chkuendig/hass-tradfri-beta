@@ -38,7 +38,7 @@ Not covered (yet): moods/scenes, smart tasks (wake-up, on/off timers) and firmwa
 
 1. Open **Marketplace** and add `https://github.com/chkuendig/hass-tradfri-beta` as a custom repository,
    category **Integration**. Adding custom repositories needs the Marketplace's GitHub connection.
-2. Install **IKEA TRÅDFRI (gateway admin)** and restart Home Assistant.
+2. Install **IKEA TRÅDFRI** and restart Home Assistant.
 
 ### Manual
 
@@ -83,6 +83,22 @@ data:
   seconds: 120
 response_variable: paired
 ```
+
+To pair a **remote or controller into a room** (the IKEA app's add-accessory step), give the group
+it should end up in — the joining controller is placed there and drives that group's lights:
+
+```yaml
+action: tradfri.pair_devices
+data:
+  seconds: 120
+  group: Hallway
+```
+
+For a remote, reset means pressing its pairing button 4× within 5 s, then holding it near the gateway
+until the gateway's link light flashes.
+
+This is the request the IKEA app sends (taken from the app), but pairing a remote this way without the app has
+not been tested yet.
 
 The gateway closes its pairing window after about a minute, however long you ask for, so the integration renews
 it every 30 seconds until `seconds` have passed. Only one pairing session can run per gateway. The response lists

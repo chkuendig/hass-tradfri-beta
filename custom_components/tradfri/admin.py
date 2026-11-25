@@ -10,18 +10,25 @@ them. Observed on gateway firmware 1.21.57:
 - Right after a delete the gateway still lists the id for a moment but
   answers 4.04 for the item itself.
 - Group membership changes show up after a short delay.
+- Membership changes are two-phase: the CoAP request returns 2.04 once the
+  change is queued, but an add only lands when the device itself answers a
+  ZCL Add Group Response. A device that is off the network (powered off,
+  unplugged) never confirms and the add silently never applies, so both
+  member services verify the committed member list before reporting success.
+  Removals, in contrast, update the gateway's list without waiting for the
+  device.
 """
 
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from pytradfri import Gateway
 from pytradfri.api.aiocoap_api import APIRequestProtocol
 from pytradfri.command import Command
-from pytradfri.const import ATTR_GROUP_ID, ATTR_ID
 from pytradfri.device import Device
 from pytradfri.error import ClientError
 from pytradfri.group import Group
@@ -46,6 +53,10 @@ REQUEST_TIMEOUT = 30
 
 _POLL_ATTEMPTS = 10
 _POLL_INTERVAL = 0.5
+
+# A membership add only commits once the device answers a ZCL Add Group
+# Response, which takes up to about 10 s.
+MEMBER_TIMEOUT_SECONDS = 15
 
 
 class GatewayError(Exception):
@@ -82,8 +93,10 @@ class TradfriAdmin:
         self._api = api
         self._gateway = gateway
 
-    async def _request[T](self, command: Command[T]) -> T:
-        return await self._api(command, timeout=REQUEST_TIMEOUT)
+    async def _request[T](
+        self, command: Command[T], timeout: float = REQUEST_TIMEOUT
+    ) -> T:
+        return await self._api(command, timeout=timeout)
 
     async def _fetch_each[T](self, commands: list[Command[T]]) -> list[T]:
         """Fetch each listed item, skipping ones deleted in the meantime."""
@@ -168,40 +181,109 @@ class TradfriAdmin:
         """Delete a group, removing its members first."""
         if group.member_ids:
             await self.remove_members(group.id, list(group.member_ids))
-
-            async def emptied() -> bool | None:
-                current = next(
-                    (g for g in await self.groups() if g.id == group.id), None
-                )
-                return True if current is None or not current.member_ids else None
-
-            if await self._poll(emptied) is None:
-                raise GatewayError(f"The gateway did not empty group {group.name!r}")
         await self._request(Gateway.delete_group(group.id))
 
     async def add_members(self, group_id: int, member_ids: list[int]) -> None:
-        """Add devices to a group."""
+        """Add devices to a group.
+
+        Raises GatewayError if the gateway does not confirm the change, which
+        happens when a device is off the network (powered off or unplugged).
+        """
+        group = await self._group_or_gone(group_id)
         for member in member_ids:
-            await self._request(
-                Gateway.add_group_member({ATTR_GROUP_ID: group_id, ATTR_ID: [member]})
-            )
+            if member in group.member_ids:
+                continue
+            await self._request(group.add_member(member))
+        await self._wait_for_members(group_id, present=member_ids)
 
     async def remove_members(self, group_id: int, member_ids: list[int]) -> None:
         """Remove devices from a group."""
+        group = await self._get_group(group_id)
+        if group is None:
+            return
         for member in member_ids:
-            await self._request(
-                Gateway.remove_group_member(
-                    {ATTR_GROUP_ID: group_id, ATTR_ID: [member]}
-                )
+            if member not in group.member_ids:
+                continue
+            await self._request(group.remove_member(member))
+        await self._wait_for_members(group_id, absent=member_ids)
+
+    async def _get_group(
+        self, group_id: int, timeout: float = REQUEST_TIMEOUT
+    ) -> Group | None:
+        """The group straight from the gateway, or None once it is gone."""
+        try:
+            return await self._request(
+                self._gateway.get_group(group_id), timeout=timeout
             )
+        except ClientError as err:
+            if "4.04" in str(err):
+                return None
+            raise
+
+    async def _group_or_gone(self, group_id: int) -> Group:
+        """The group, or an error once the gateway no longer lists it."""
+        if (group := await self._get_group(group_id)) is not None:
+            return group
+        raise GatewayError(f"The gateway no longer lists group {group_id}")
+
+    async def _wait_for_members(
+        self,
+        group_id: int,
+        *,
+        present: list[int] | None = None,
+        absent: list[int] | None = None,
+    ) -> None:
+        """Wait until the gateway's committed member list shows the change.
+
+        An add only commits once the device answers a ZCL Add Group Response,
+        so the list is re-read until a deadline; a timeout means the change
+        was not confirmed, e.g. by an unreachable (powered off) device.
+        """
+        present, absent = set(present or []), set(absent or [])
+        members: set[int] = set()
+        end = time.monotonic() + MEMBER_TIMEOUT_SECONDS
+        while True:
+            # Bound each read by the time left, so one hung request cannot
+            # push the whole check far past the deadline.
+            budget = max(1.0, min(REQUEST_TIMEOUT, end - time.monotonic()))
+            if (group := await self._get_group(group_id, timeout=budget)) is None:
+                if not present:
+                    return  # The group is gone; its members are too.
+                break  # An add cannot commit into a group that is gone.
+            members = set(group.member_ids)
+            if present <= members and not absent & members:
+                return
+            if time.monotonic() >= end:
+                break
+            await asyncio.sleep(_POLL_INTERVAL)
+        if present:
+            raise GatewayError(
+                f"The gateway did not confirm adding device(s)"
+                f" {sorted(present - members)} to group {group_id}: the device(s)"
+                " may be unreachable (powered off)"
+            )
+        raise GatewayError(
+            f"The gateway did not confirm removing device(s)"
+            f" {sorted(absent & members)} from group {group_id}"
+        )
 
     async def remove_device(self, device_id: int) -> None:
         """Remove (unpair) a device from the gateway."""
         await self._request(Gateway.remove_device(device_id))
 
-    async def open_pairing(self) -> None:
-        """Open or renew the gateway's pairing window."""
-        await self._request(Gateway.set_commissioning_timeout(PAIRING_WINDOW_SECONDS))
+    async def open_pairing(
+        self, group_id: int | None = None, group_name: str | None = None
+    ) -> None:
+        """Open or renew the gateway's pairing window.
+
+        A joining controller is placed in group group_id, or in a new group
+        named group_name; without either, the gateway keeps its default.
+        """
+        await self._request(
+            Gateway.set_commissioning_timeout(
+                PAIRING_WINDOW_SECONDS, group_id=group_id, group_name=group_name
+            )
+        )
 
     async def close_pairing(self) -> None:
         """Close the gateway's pairing window."""

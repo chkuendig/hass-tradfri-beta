@@ -3,6 +3,7 @@
 from typing import TYPE_CHECKING, Any, cast, override
 
 from pytradfri.api.aiocoap_api import APIRequestProtocol
+from pytradfri.group import Group
 
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
@@ -15,12 +16,18 @@ from homeassistant.components.light import (
     filter_supported_color_modes,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import color as color_util
 
-from .const import CONF_GATEWAY_ID
-from .coordinator import TradfriConfigEntry, TradfriDeviceDataUpdateCoordinator
-from .entity import TradfriBaseEntity
+from .const import CONF_GATEWAY_ID, DOMAIN
+from .coordinator import (
+    TradfriConfigEntry,
+    TradfriDeviceDataUpdateCoordinator,
+    TradfriGroupDataUpdateCoordinator,
+)
+from .entity import TradfriBaseEntity, handle_error
 
 
 async def async_setup_entry(
@@ -40,6 +47,25 @@ async def async_setup_entry(
         )
         for device_coordinator in tradfri_data.coordinator_list
         if device_coordinator.device.has_light_control
+    )
+
+    # A group dims only if a member can; relays in 3311 are on/off only.
+    dimmable_ids = {
+        coordinator.device.id
+        for coordinator in tradfri_data.coordinator_list
+        if (light_control := coordinator.device.light_control)
+        and light_control.lights[0].supports_dimmer
+    }
+    async_add_entities(
+        TradfriGroupLight(
+            group_coordinator,
+            tradfri_data.api,
+            gateway_id,
+            dimmable=not dimmable_ids.isdisjoint(
+                group_coordinator.group.member_ids
+            ),
+        )
+        for group_coordinator in tradfri_data.group_coordinator_list
     )
 
 
@@ -248,3 +274,96 @@ class TradfriLight(TradfriBaseEntity, LightEntity):
                 await self._api(temp_command)
             if command is not None:
                 await self._api(command)
+
+
+class TradfriGroupLight(
+    CoordinatorEntity[TradfriGroupDataUpdateCoordinator], LightEntity
+):
+    """A gateway group exposed as a single light.
+
+    It dims if at least one member can; groups of relays are on/off only.
+
+    The IKEA gateway keeps user-defined groups (rooms) that aggregate several
+    bulbs; this surfaces each such group as one controllable light so the
+    grouping made on the gateway is usable from Home Assistant.
+    """
+
+    _attr_has_entity_name = True
+    _attr_name = None
+
+    def __init__(
+        self,
+        group_coordinator: TradfriGroupDataUpdateCoordinator,
+        api: APIRequestProtocol,
+        gateway_id: str,
+        *,
+        dimmable: bool,
+    ) -> None:
+        """Initialize a group light."""
+        super().__init__(group_coordinator)
+        self._dimmable = dimmable
+        mode = ColorMode.BRIGHTNESS if dimmable else ColorMode.ONOFF
+        self._attr_supported_color_modes = {mode}
+        self._attr_color_mode = mode
+        if dimmable:
+            self._attr_supported_features = LightEntityFeature.TRANSITION
+        self._api = handle_error(api)
+        group = group_coordinator.group
+        self._attr_unique_id = f"group-{gateway_id}-{group.id}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, f"{gateway_id}-group-{group.id}")},
+            manufacturer="IKEA of Sweden",
+            model="TRADFRI group",
+            name=group.name,
+            via_device=(DOMAIN, gateway_id),
+        )
+
+    @property
+    def _group(self) -> Group:
+        """Return the current group data from the coordinator."""
+        return self.coordinator.data
+
+    @property
+    @override
+    def is_on(self) -> bool:
+        """Return true if the group is on."""
+        return self._group.state
+
+    @property
+    @override
+    def brightness(self) -> int | None:
+        """Return the group brightness."""
+        return cast(int, self._group.dimmer) if self._dimmable else None
+
+    @override
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Turn the group on, optionally at a brightness or with a transition."""
+        if not self._dimmable:
+            await self._api(self._group.set_state(True))
+            return
+        transition_time = (
+            int(kwargs[ATTR_TRANSITION] * 10) if ATTR_TRANSITION in kwargs else None
+        )
+        if ATTR_BRIGHTNESS in kwargs:
+            brightness = min(kwargs[ATTR_BRIGHTNESS], 254)
+        elif transition_time is not None:
+            # Fading in needs a target; keep the group's level, or full if off.
+            brightness = self._group.dimmer or 254
+        else:
+            await self._api(self._group.set_state(True))
+            return
+        await self._api(
+            self._group.set_dimmer(brightness, transition_time=transition_time)
+        )
+
+    @override
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Turn the group off."""
+        if self._dimmable and ATTR_TRANSITION in kwargs:
+            await self._api(
+                self._group.set_dimmer(
+                    0, transition_time=int(kwargs[ATTR_TRANSITION] * 10)
+                )
+            )
+        else:
+            await self._api(self._group.set_state(False))

@@ -11,6 +11,9 @@ pair_devices:
           min: 30
           max: 600
           unit_of_measurement: s
+    group:
+      selector:
+        text:
 list_groups:
   fields:
     config_entry_id:
