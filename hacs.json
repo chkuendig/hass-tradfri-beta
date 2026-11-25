@@ -1,5 +1,5 @@
 {
-    "name": "IKEA TRÅDFRI (gateway admin)",
+    "name": "IKEA TRÅDFRI",
     "homeassistant": "2026.11.0",
     "render_readme": true
 }
