@@ -34,6 +34,17 @@
             "last_seen": {
                 "name": "Last seen"
             }
+        },
+        "select": {
+            "power_on_behavior": {
+                "name": "Power-on behavior",
+                "state": {
+                    "off": "Off",
+                    "on": "On",
+                    "toggle": "Toggle",
+                    "previous": "Previous state"
+                }
+            }
         }
     },
     "services": {

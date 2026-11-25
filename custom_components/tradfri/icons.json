@@ -7,6 +7,11 @@
       "filter_life_remaining": {
         "default": "mdi:clock-outline"
       }
+    },
+    "select": {
+      "power_on_behavior": {
+        "default": "mdi:power-settings"
+      }
     }
   }
 }

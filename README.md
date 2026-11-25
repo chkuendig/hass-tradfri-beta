@@ -26,6 +26,7 @@ purifiers and sensors work as they do there, with two fixes on top:
 | Remove (unpair) devices | `tradfri.remove_device`, or **Delete** on the device page for devices that are gone or unreachable |
 | Restart the gateway | **Restart** button on the gateway device (configuration entity) |
 | See when a device last talked to the gateway | **Last seen** diagnostic sensor on every device |
+| Choose what a lamp or outlet does when its power comes back | **Power-on behavior** select on every light and outlet (configuration entity) |
 
 The actions change the gateway's setup, so only administrators can run them, like the network management actions of
 Zigbee Home Automation (ZHA).
@@ -150,6 +151,17 @@ The gateway updates a device's last-seen time when the device talks to it. It is
 lamp that sits idle can show an old time and still work. The gateway only marks a device unreachable after a
 command to it fails.
 
+### Power-on behavior
+
+Every light and outlet gets a **Power-on behavior** select: *Off*, *On*, *Toggle* or *Previous state*. It is what
+the device does when its mains power returns, for example after a wall switch or a power cut. Set it with
+`select.select_option` in automations. The device stores the setting, not Home Assistant.
+
+The state is *unknown* until the device has reported the setting to the gateway. The gateway writes the standard
+Zigbee attribute and cannot tell whether a device supports it. A device that doesn't support it may accept the
+write and ignore it, so check the result once by switching the power off and on. The IKEA app only offers this for
+IKEA devices; the gateway itself doesn't have that limit.
+
 ## Gateway API notes (firmware 1.21.57)
 
 Things learned while building this:
@@ -159,6 +171,11 @@ Things learned while building this:
 - `DELETE /15004/<id>` only works on an empty group (`4.00 Bad Request` otherwise).
 - Right after a delete the gateway still lists the id for a moment, but answers `4.04` for the item itself.
 - `DELETE /15001/<id>` removes a device.
+- Lights (`3311`) and outlets (`3312`) carry the power-on behavior in `5849`: 1 = off, 2 = on, 3 = toggle,
+  4 = previous state, 0 = not reported yet. Writing it (`PUT /15001/<id>` with `{"3311": [{"5849": 4}]}`) makes the
+  gateway send a standard ZCL Write Attributes for StartUpOnOff (`0x4003`) of the On/Off cluster. Tuya's own
+  attribute for this (`0x8002`, where 2 means previous state) is not reachable this way, and no other gateway
+  writer for it is known.
 - The commissioning (pairing) window closes after about 45–60 s regardless of the requested timeout.
 - The SuperGroup has id 131073 here and in pytradfri's endpoint example from another gateway. Its attribute `9108`
   is 2 (0 for rooms), but no client documents what `9108` means.
